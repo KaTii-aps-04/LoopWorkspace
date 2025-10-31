@@ -18,10 +18,13 @@ jobs:
         with:
           xcode-version: latest
 
-      - name: Install Dependencies
-        run: |
-          brew install git
-          ./Scripts/bootstrap.sh
+    - name: Install Dependencies
+  run: |
+    brew install git
+    gem install bundler
+    bundle install
+    pod install --project-directory=LoopWorkspace
+
 
       - name: Validate Fastlane Secrets
         run: |
