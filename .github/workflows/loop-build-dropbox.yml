@@ -1,0 +1,92 @@
+name: Loop Build + Dropbox Upload
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest
+
+      - name: Install Dependencies
+        run: |
+          brew install git
+          ./Scripts/bootstrap.sh
+
+      - name: Validate Fastlane Secrets
+        run: |
+          if [ -z "${{ secrets.FASTLANE_ISSUER_ID }}" ] || \
+             [ -z "${{ secrets.FASTLANE_KEY_ID }}" ] || \
+             [ -z "${{ secrets.FASTLANE_KEY_CONTENT }}" ]; then
+            echo "❌ Missing Fastlane API secrets!"
+            exit 2
+          fi
+          echo "✅ Fastlane secrets detected."
+
+      - name: Build and Export IPA
+        env:
+          FASTLANE_ISSUER_ID: ${{ secrets.FASTLANE_ISSUER_ID }}
+          FASTLANE_KEY_ID: ${{ secrets.FASTLANE_KEY_ID }}
+          FASTLANE_KEY_CONTENT: ${{ secrets.FASTLANE_KEY_CONTENT }}
+          APP_IDENTIFIER: "com.deinname.loop"
+          APPLE_TEAM_ID: "DEINTEAMID"
+        run: |
+          bundle install
+          bundle exec fastlane gym \
+            --workspace "LoopWorkspace/Loop.xcworkspace" \
+            --scheme "Loop" \
+            --export_method "development" \
+            --output_directory "./build" \
+            --output_name "Loop-Dash.ipa"
+
+      - name: Upload IPA to Dropbox
+        id: dropbox
+        run: |
+          echo "📤 Uploading to Dropbox..."
+          RESPONSE=$(curl -s -X POST https://content.dropboxapi.com/2/files/upload \
+            --header "Authorization: Bearer ${{ secrets.DROPBOX_TOKEN }}" \
+            --header "Dropbox-API-Arg: {\"path\": \"/Loop-Dash.ipa\", \"mode\": \"overwrite\"}" \
+            --header "Content-Type: application/octet-stream" \
+            --data-binary @build/Loop-Dash.ipa)
+
+          echo "Dropbox upload response: $RESPONSE"
+
+          # Create a shared link
+          LINK_RESPONSE=$(curl -s -X POST https://api.dropboxapi.com/2/sharing/create_shared_link_with_settings \
+            --header "Authorization: Bearer ${{ secrets.DROPBOX_TOKEN }}" \
+            --header "Content-Type: application/json" \
+            --data "{\"path\": \"/Loop-Dash.ipa\", \"settings\": {\"requested_visibility\": \"public\"}}")
+
+          echo "Shared link: $LINK_RESPONSE"
+          LINK=$(echo $LINK_RESPONSE | python3 -c "import sys, json; print(json.load(sys.stdin)['url'].replace('dl=0', 'dl=1'))")
+          echo "link=$LINK" >> $GITHUB_OUTPUT
+
+      - name: Notify via Email
+        if: success()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: "✅ Loop .IPA Build fertig!"
+          to: "deine.mail@example.com"
+          from: "Loop Build Bot <deine.mail@example.com>"
+          body: |
+            Dein Loop-Build war erfolgreich 🎉
+
+            Lade deine signierte .ipa hier herunter:
+            ${{ steps.dropbox.outputs.link }}
+
+            --
+            Automatisch generiert von GitHub Actions
